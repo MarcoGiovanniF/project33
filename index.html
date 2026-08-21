@@ -17,6 +17,7 @@
     --ink:#F1F3EF; --ink-2:#FFFFFF; --ink-3:#DEE5DF;
     --brass:#2F6E62; --brass-dim:#62706A;
     --aurora:#3E8C7A; --haze:#5A6862; --cream:#1B2724;
+    --ahead:#1F8A4C; --behind:#C0392B;
     --display:"Fraunces",Georgia,serif;
     --ui:"Inter Tight",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
   }
@@ -32,30 +33,21 @@
   button{ font-family:inherit; font-size:inherit; color:inherit; border:0; background:none; cursor:pointer; }
   button:focus-visible, input:focus-visible{ outline:2px solid var(--brass); outline-offset:2px; }
 
-  .dial-wrap{ padding:24px 0 4px; display:flex; justify-content:center; }
-  .dial{ position:relative; width:230px; height:230px; }
+  .topband{ display:flex; align-items:center; gap:14px; padding:20px 0 14px; }
+  .dial{ position:relative; flex:1 1 0; min-width:0; aspect-ratio:1; }
+  .mini-chart{ flex:1 1 0; min-width:0; }
+  .mini-chart svg{ width:100%; height:auto; display:block; }
   .dial svg{ width:100%; height:100%; display:block; }
-  .track{ fill:none; stroke:var(--ink-3); stroke-width:9; }
-  .arc{ fill:none; stroke:var(--brass); stroke-width:9; stroke-linecap:round;
-        transition:stroke-dashoffset .55s cubic-bezier(.22,1,.36,1); }
+  .track{ fill:none; stroke:var(--ink-3); stroke-width:11; }
+  .arc{ fill:none; stroke:var(--ahead); stroke-width:11; stroke-linecap:round;
+        transition:stroke-dashoffset .55s cubic-bezier(.22,1,.36,1), stroke .4s ease; }
   .tick{ fill:var(--ink-3); } .tick.top{ fill:var(--brass-dim); }
   .now-hand{ stroke:var(--haze); stroke-width:2; stroke-linecap:round; opacity:.85; }
   .dial-face{ position:absolute; inset:0; display:flex; flex-direction:column;
               align-items:center; justify-content:center; text-align:center; pointer-events:none; }
-  .pace-time{ font-family:var(--display); font-variation-settings:"opsz" 120,"wght" 300;
-              font-size:50px; line-height:1; letter-spacing:-.02em; font-feature-settings:"tnum"; }
-  .pace-label{ margin-top:8px; font-size:12px; letter-spacing:.10em; text-transform:uppercase; color:var(--haze); }
-  .pace-gap{ margin-top:3px; font-size:14px; color:var(--brass); font-weight:500; }
-  .pace-gap.behind{ color:var(--haze); font-weight:400; }
-
-  .strip{ cursor:pointer; display:flex; align-items:center; justify-content:center; gap:46px; padding:16px 15px;
-          margin:12px 0 2px; background:var(--ink-2); border-radius:16px;
-          box-shadow:0 0 0 1px var(--ink-3); }
-  .stat{ flex-shrink:0; text-align:center; }
-  .stat b{ display:block; font-family:var(--display); font-variation-settings:"opsz" 60,"wght" 500;
-           font-weight:500; font-size:30px; line-height:1; font-feature-settings:"tnum"; }
-  .stat span{ display:block; font-size:11px; letter-spacing:.09em; text-transform:uppercase;
-              color:var(--haze); margin-top:5px; }
+  .pace-time{ font-family:var(--display); font-variation-settings:"opsz" 120,"wght" 400;
+              font-size:36px; line-height:1; letter-spacing:-.02em; font-feature-settings:"tnum";
+              transition:color .4s ease; }
   .sec{ display:flex; align-items:baseline; justify-content:space-between; margin:24px 2px 10px;
         font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--haze); }
   .sec .count{ color:var(--brass-dim); }
@@ -157,7 +149,8 @@
 
 <div class="saving" id="saving"></div>
 
-<div class="dial-wrap"><div class="dial">
+<div class="topband">
+  <div class="dial">
   <svg viewBox="0 0 200 200" aria-hidden="true">
     <circle class="track" cx="100" cy="100" r="86"></circle>
     <circle class="arc" id="arc" cx="100" cy="100" r="86" transform="rotate(-90 100 100)"
@@ -168,14 +161,9 @@
   </svg>
   <div class="dial-face">
     <div class="pace-time" id="paceTime">00:00</div>
-    <div class="pace-label">day pace</div>
-    <div class="pace-gap" id="paceGap"></div>
   </div>
-</div></div>
-
-<div class="strip" id="strip" role="button" tabindex="0">
-  <div class="stat"><b id="pctNum">0%</b><span>today</span></div>
-  <div class="stat"><b id="avgNum">0</b><span>average</span></div>
+  </div>
+  <div class="mini-chart" id="miniChart"></div>
 </div>
 
 <div id="todo"></div>
@@ -482,30 +470,75 @@
     if(mins >= 24*60) return "24:00";
     return String(Math.floor(mins/60)).padStart(2,"0")+":"+String(mins%60).padStart(2,"0");
   }
-  function gapText(m){
-    var a = Math.abs(Math.round(m));
-    if(a < 6) return "right on pace";
-    var h = Math.floor(a/60), mm = a%60;
-    return ((h?h+"h ":"")+(mm?mm+"m":"")).trim() + (m>=0 ? " ahead" : " to go");
-  }
   function tickDial(){
     var pct = dayPct(), paceMins = pct*24*60;
     var now = new Date(), nowMins = now.getHours()*60 + now.getMinutes();
-    document.getElementById("arc").setAttribute("stroke-dashoffset", CIRC*(1-pct));
-    document.getElementById("paceTime").textContent = fmt(paceMins);
-    var gap = document.getElementById("paceGap"), diff = paceMins - nowMins;
-    gap.textContent = S.habits.length ? gapText(diff) : "no habits yet";
-    gap.className = "pace-gap" + (diff < 0 ? " behind" : "");
+    var arc = document.getElementById("arc");
+    arc.setAttribute("stroke-dashoffset", CIRC*(1-pct));
+
+    /* green while the day's progress is level with or ahead of the clock,
+       red once it falls behind. The whole dial carries it — no caption needed. */
+    var ahead = !S.habits.length || paceMins >= nowMins;
+    var col = ahead ? "var(--ahead)" : "var(--behind)";
+    arc.style.stroke = col;
+    var t = document.getElementById("paceTime");
+    t.textContent = fmt(paceMins);
+    t.style.color = col;
     var a = (nowMins/(24*60))*2*Math.PI - Math.PI/2;
     var hand = document.getElementById("nowHand");
     hand.setAttribute("x2",(100+Math.cos(a)*76).toFixed(1));
     hand.setAttribute("y2",(100+Math.sin(a)*76).toFixed(1));
   }
+  /* Small overview chart beside the clock. Fixed 0-100 axis, so the line's
+     height is literally how far along the journey you are. */
+  /* One gradient reused by both charts. It runs bottom to top over the 0-100
+     axis, so a point's colour is the rainbow value of its own number — the
+     same mapping as the habit tiles. */
+  function rainbowDefs(id, yTop, yBottom){
+    var stops = "";
+    for(var v = 0; v <= 100; v += 10){
+      stops += '<stop offset="' + v + '%" stop-color="hsl(' + (v*3) + ',85%,45%)"></stop>';
+    }
+    return '<defs><linearGradient id="' + id + '" gradientUnits="userSpaceOnUse" ' +
+           'x1="0" y1="' + yBottom + '" x2="0" y2="' + yTop + '">' + stops + "</linearGradient></defs>";
+  }
+
+  function drawMini(){
+    var el = document.getElementById("miniChart");
+    if(!el) return;
+    var pts = chartPoints();
+    var W = 168, H = 132, PAD = 6;
+
+    if(pts.length < 2){ el.innerHTML = ""; return; }
+
+    var last = pts[pts.length-1].total;
+    var pr = projection(pts);
+    var span = pr ? pr.span : (pts.length - 1);
+
+    function x(i){ return PAD + (i/span) * (W - PAD*2); }
+    function y(v){ return H - PAD - (clamp(v,0,100)/100) * (H - PAD*2); }
+
+    var line = "";
+    pts.forEach(function(p,i){ line += (i?"L":"M") + x(i).toFixed(1) + " " + y(p.total).toFixed(1) + " "; });
+
+    var climb = pr
+      ? '<line x1="' + x(pts.length-1).toFixed(1) + '" y1="' + y(last).toFixed(1) +
+        '" x2="' + x(pr.span).toFixed(1) + '" y2="' + y(100).toFixed(1) +
+        '" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="2 5" stroke-linecap="round"></line>'
+      : "";
+
+    el.innerHTML = '<svg viewBox="0 0 ' + W + " " + H + '">' +
+      rainbowDefs("gradMini", y(100), y(0)) + climb +
+      '<path d="' + line + '" fill="none" stroke="url(#gradMini)" stroke-width="2.2" ' +
+        'stroke-linejoin="round" stroke-linecap="round"></path>' +
+      "</svg>";
+  }
+
   /* ---------- render ---------- */
 
   function esc(t){ return String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;")
     .replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
-  /* Marco's sheet colouring: hue = score * 3, so 0 is red and 100 is purple,
+  /* Score colouring: hue = score * 3, so 0 is red and 100 is purple,
      the full way round the rainbow. */
   /* Where a habit's score lands if the day ended now. Scores only bank at
      midnight, but showing yesterday's number next to a habit you have just
@@ -542,11 +575,7 @@
   function fmtVal(v){ return parseFloat(v.toFixed(4)).toString(); }
 
   function render(){
-    tickDial();
-    var avgEl = document.getElementById("avgNum");
-    avgEl.textContent = fineNum(liveMean());
-    avgEl.setAttribute("style", scoreStyle(liveMean()));
-    document.getElementById("pctNum").textContent = Math.round(dayPct()*100)+"%";
+    tickDial(); drawMini();
 
     var order = seededOrder();
     var todo = order.filter(function(h){ return !isDone(h); });
@@ -637,9 +666,6 @@
     var h = byId(b.dataset.undo); if(!h) return;
     h.frac = 0; h.expr = ""; save(); render();
   });
-  document.getElementById("strip").onclick = function(){
-    if(S) openProgress();
-  };
   document.getElementById("editBtn").onclick = function(){
     editMode = !editMode; render();
     if(editMode) document.getElementById("hint").textContent = "Tap any habit above to edit it";
@@ -884,25 +910,38 @@
     return run;
   }
 
+  /* How far the x axis has to run for the trend to reach 100. Returns null when
+     the trend is flat or falling (no summit in sight) or when it is so shallow
+     the answer is decades away and meaningless. */
+  function projection(pts){
+    var tr = trendOf(pts);
+    if(!tr || tr.slope <= 0.0008) return null;
+    var last = pts.length - 1;
+    var at100 = (100 - tr.at(0)) / tr.slope;
+    if(at100 <= last) at100 = last + 1;          // already at the top
+    if(at100 > last + 3650) return null;          // beyond ten years
+    return { tr: tr, span: at100, daysLeft: Math.round(at100 - last) };
+  }
+
+  function projectedDate(daysLeft){
+    var d = new Date();
+    d.setDate(d.getDate() + daysLeft);
+    return (d.getDate()) + " " + MON[d.getMonth()] + " " + d.getFullYear();
+  }
+
   function chartSVG(pts){
     var W = 320, H = 136, PAD = 8;
     if(pts.length < 3){
       return '<div class="help">Not enough days yet — the chart fills in as you go.</div>';
     }
-    var vals = pts.map(function(p){ return p.total; });
-    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
-    var pad = (hi - lo) * 0.12;
-    lo -= pad; hi += pad;
+    /* fixed 0-100: the same scale as the goal, so height means distance travelled */
+    var lo = 0, hi = 100;
     var tr = trendOf(pts);
-    if(tr){
-      lo = Math.min(lo, tr.at(0), tr.at(pts.length-1));
-      hi = Math.max(hi, tr.at(0), tr.at(pts.length-1));
-    }
-    lo = Math.min(lo, 0);
-    if(hi - lo < 1) hi = lo + 1;
 
-    function x(i){ return PAD + (i/(pts.length-1)) * (W - PAD*2); }
-    function y(v){ return H - PAD - ((v - lo)/(hi - lo)) * (H - PAD*2); }
+    var pr = projection(pts);
+    var span = pr ? pr.span : (pts.length - 1);
+    function x(i){ return PAD + (i/span) * (W - PAD*2); }
+    function y(v){ return H - PAD - (clamp(v,lo,hi)/(hi - lo)) * (H - PAD*2); }
 
     var line = "";
     pts.forEach(function(p,i){ line += (i?"L":"M") + x(i).toFixed(1) + " " + y(p.total).toFixed(1) + " "; });
@@ -910,34 +949,41 @@
     var area = line + "L" + x(pts.length-1).toFixed(1) + " " + base +
                " L" + x(0).toFixed(1) + " " + base + " Z";
 
-    var dots = pts.map(function(p,i){
-      if(p.sum >= 0) return "";
-      return '<circle cx="' + x(i).toFixed(1) + '" cy="' + y(p.total).toFixed(1) +
-             '" r="3" fill="var(--ink-2)" stroke="var(--haze)" stroke-width="1.5"></circle>';
-    }).join("");
+    var dots = "";   /* value is carried by the line's colour now */
+
+    var summit = '<line x1="' + PAD + '" y1="' + y(100).toFixed(1) + '" x2="' + (W-PAD) +
+      '" y2="' + y(100).toFixed(1) + '" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="3 4"></line>';
 
     var zero = (lo < 0 && hi > 0)
       ? '<line x1="' + PAD + '" y1="' + y(0).toFixed(1) + '" x2="' + (W-PAD) +
         '" y2="' + y(0).toFixed(1) + '" stroke="var(--ink-3)" stroke-width="1"></line>' : "";
 
-    var trend = tr
-      ? '<line x1="' + x(0).toFixed(1) + '" y1="' + y(tr.at(0)).toFixed(1) +
+    /* the trend, carried on to where it meets 100 */
+    var trend = "";
+    if(pr){
+      trend = '<line x1="' + x(0).toFixed(1) + '" y1="' + y(tr.at(0)).toFixed(1) +
+        '" x2="' + x(pr.span).toFixed(1) + '" y2="' + y(100).toFixed(1) +
+        '" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="3 5" stroke-linecap="round"></line>' +
+        '<circle cx="' + x(pr.span).toFixed(1) + '" cy="' + y(100).toFixed(1) +
+        '" r="2.5" fill="none" stroke="var(--ink-3)" stroke-width="1"></circle>';
+    } else if(tr){
+      trend = '<line x1="' + x(0).toFixed(1) + '" y1="' + y(tr.at(0)).toFixed(1) +
         '" x2="' + x(pts.length-1).toFixed(1) + '" y2="' + y(tr.at(pts.length-1)).toFixed(1) +
-        '" stroke="var(--haze)" stroke-width="1.6" stroke-dasharray="5 4" stroke-linecap="round"></line>' : "";
+        '" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="3 5" stroke-linecap="round"></line>';
+    }
 
     var last = pts[pts.length-1];
     return '<svg viewBox="0 0 ' + W + " " + H + '" style="width:100%;height:auto;display:block">' +
-      zero +
-      '<path d="' + area + '" fill="rgba(47,110,98,.12)"></path>' + trend +
-      '<path d="' + line + '" fill="none" stroke="var(--brass)" stroke-width="2.4" ' +
-        'stroke-linejoin="round" stroke-linecap="round"></path>' + dots +
-      '<circle cx="' + x(pts.length-1).toFixed(1) + '" cy="' + y(last.total).toFixed(1) +
-        '" r="4" fill="var(--brass)"></circle></svg>';
+      rainbowDefs("gradBig", y(100), y(0)) + summit + zero +
+      '<path d="' + area + '" fill="url(#gradBig)" opacity=".10"></path>' + trend +
+      '<path d="' + line + '" fill="none" stroke="url(#gradBig)" stroke-width="2.4" ' +
+        'stroke-linejoin="round" stroke-linecap="round"></path>' + dots + "</svg>";
   }
 
   function openProgress(){
     var pts = chartPoints();
     var tr = trendOf(pts);
+    var pr = projection(pts);
     var total = pts.length ? pts[pts.length-1].total : 0;
     var round1 = function(v){ return Math.round(v*10)/10; };
     var round2 = function(v){ return Math.round(v*100)/100; };
@@ -970,6 +1016,9 @@
 
       '<div class="field"><label>Which way it is going</label><div class="help">' +
         "Trend: " + dir + "\n" +
+        (pr ? "At this rate, 100 around " + projectedDate(pr.daysLeft) +
+              " — " + pr.daysLeft + " days away\n"
+            : "Not climbing toward 100 at the moment\n") +
         offTrend + "\n" +
         (run > 0 ? "Clean days in a row: " + run + "\n" : "") +
         "Days tracked: " + S.history.length +
