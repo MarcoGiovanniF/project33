@@ -18,6 +18,7 @@
     --brass:#2F6E62; --brass-dim:#62706A;
     --aurora:#3E8C7A; --haze:#5A6862; --cream:#1B2724;
     --ahead:#1F8A4C; --behind:#C0392B;
+    --trend:#93A29A;
     --display:"Fraunces",Georgia,serif;
     --ui:"Inter Tight",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
   }
@@ -507,7 +508,7 @@
     var el = document.getElementById("miniChart");
     if(!el) return;
     var pts = chartPoints();
-    var W = 168, H = 132, PAD = 6;
+    var W = 168, H = 132, PAD = 11;
 
     if(pts.length < 2){ el.innerHTML = ""; return; }
 
@@ -524,11 +525,28 @@
     var climb = pr
       ? '<line x1="' + x(pts.length-1).toFixed(1) + '" y1="' + y(last).toFixed(1) +
         '" x2="' + x(pr.span).toFixed(1) + '" y2="' + y(100).toFixed(1) +
-        '" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="2 5" stroke-linecap="round"></line>'
+        '" stroke="var(--trend)" stroke-width="1.2" stroke-dasharray="3 4" stroke-linecap="round"></line>'
+      : "";
+
+    /* today's own rate, carried on at the same slope */
+    var tod = todayRate(pts), rate = "";
+    if(tod){
+      var tx = Math.min(tod.span, span);
+      var ty = 100 - (tod.span - tx) * tod.delta;
+      rate = '<line x1="' + x(pts.length-1).toFixed(1) + '" y1="' + y(last).toFixed(1) +
+             '" x2="' + x(tx).toFixed(1) + '" y2="' + y(ty).toFixed(1) +
+             '" stroke="var(--ahead)" stroke-width="1.3" stroke-dasharray="1 3" ' +
+             'stroke-linecap="round" opacity=".85"></line>';
+    }
+
+    var summitLabel = pr
+      ? '<text x="' + (W-PAD) + '" y="' + (y(100)-3).toFixed(1) + '" text-anchor="end" ' +
+        'font-size="8.5" fill="var(--haze)" font-family="' + "Inter Tight, sans-serif" + '">' +
+        esc(shortProjDate(pr.daysLeft)) + "</text>"
       : "";
 
     el.innerHTML = '<svg viewBox="0 0 ' + W + " " + H + '">' +
-      rainbowDefs("gradMini", y(100), y(0)) + climb +
+      rainbowDefs("gradMini", y(100), y(0)) + climb + rate + summitLabel +
       '<path d="' + line + '" fill="none" stroke="url(#gradMini)" stroke-width="2.2" ' +
         'stroke-linejoin="round" stroke-linecap="round"></path>' +
       "</svg>";
@@ -923,14 +941,30 @@
     return { tr: tr, span: at100, daysLeft: Math.round(at100 - last) };
   }
 
+  function shortProjDate(daysLeft){
+    var d = new Date();
+    d.setDate(d.getDate() + daysLeft);
+    return MON[d.getMonth()] + " " + String(d.getFullYear()).slice(2);
+  }
+
   function projectedDate(daysLeft){
     var d = new Date();
     d.setDate(d.getDate() + daysLeft);
     return (d.getDate()) + " " + MON[d.getMonth()] + " " + d.getFullYear();
   }
 
+  /* The segment from yesterday to today, carried forward. Steeper than the
+     trend means today is beating your average; shallower means it is not. */
+  function todayRate(pts){
+    if(pts.length < 2) return null;
+    var last = pts[pts.length-1].total, prev = pts[pts.length-2].total;
+    var delta = last - prev;
+    if(delta <= 0.0005) return null;
+    return { delta: delta, span: (pts.length-1) + (100 - last)/delta };
+  }
+
   function chartSVG(pts){
-    var W = 320, H = 136, PAD = 8;
+    var W = 320, H = 142, PAD = 14;
     if(pts.length < 3){
       return '<div class="help">Not enough days yet — the chart fills in as you go.</div>';
     }
@@ -963,19 +997,31 @@
     if(pr){
       trend = '<line x1="' + x(0).toFixed(1) + '" y1="' + y(tr.at(0)).toFixed(1) +
         '" x2="' + x(pr.span).toFixed(1) + '" y2="' + y(100).toFixed(1) +
-        '" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="3 5" stroke-linecap="round"></line>' +
+        '" stroke="var(--trend)" stroke-width="1.3" stroke-dasharray="4 4" stroke-linecap="round"></line>' +
         '<circle cx="' + x(pr.span).toFixed(1) + '" cy="' + y(100).toFixed(1) +
-        '" r="2.5" fill="none" stroke="var(--ink-3)" stroke-width="1"></circle>';
+        '" r="3" fill="none" stroke="var(--trend)" stroke-width="1.3"></circle>' +
+        '<text x="' + (W-PAD) + '" y="' + (y(100)-6).toFixed(1) + '" text-anchor="end" font-size="10" ' +
+        'fill="var(--haze)">100 · ' + esc(projectedDate(pr.daysLeft)) + '</text>';
     } else if(tr){
       trend = '<line x1="' + x(0).toFixed(1) + '" y1="' + y(tr.at(0)).toFixed(1) +
         '" x2="' + x(pts.length-1).toFixed(1) + '" y2="' + y(tr.at(pts.length-1)).toFixed(1) +
-        '" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="3 5" stroke-linecap="round"></line>';
+        '" stroke="var(--trend)" stroke-width="1.3" stroke-dasharray="4 4" stroke-linecap="round"></line>';
+    }
+
+    var tod = todayRate(pts), rate = "";
+    if(tod){
+      var tx = Math.min(tod.span, span);
+      var ty = 100 - (tod.span - tx) * tod.delta;
+      rate = '<line x1="' + x(pts.length-1).toFixed(1) + '" y1="' + y(pts[pts.length-1].total).toFixed(1) +
+             '" x2="' + x(tx).toFixed(1) + '" y2="' + y(ty).toFixed(1) +
+             '" stroke="var(--ahead)" stroke-width="1.5" stroke-dasharray="1 3" ' +
+             'stroke-linecap="round" opacity=".85"></line>';
     }
 
     var last = pts[pts.length-1];
     return '<svg viewBox="0 0 ' + W + " " + H + '" style="width:100%;height:auto;display:block">' +
       rainbowDefs("gradBig", y(100), y(0)) + summit + zero +
-      '<path d="' + area + '" fill="url(#gradBig)" opacity=".10"></path>' + trend +
+      '<path d="' + area + '" fill="url(#gradBig)" opacity=".10"></path>' + trend + rate +
       '<path d="' + line + '" fill="none" stroke="url(#gradBig)" stroke-width="2.4" ' +
         'stroke-linejoin="round" stroke-linecap="round"></path>' + dots + "</svg>";
   }
