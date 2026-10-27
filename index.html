@@ -36,7 +36,7 @@
 
   .topband{ display:flex; align-items:center; gap:14px; padding:20px 0 14px; }
   .dial{ position:relative; flex:1 1 0; min-width:0; aspect-ratio:1; }
-  .mini-chart{ flex:1 1 0; min-width:0; }
+  .mini-chart{ flex:1 1 0; min-width:0; cursor:pointer; }
   .mini-chart svg{ width:100%; height:auto; display:block; }
   .dial svg{ width:100%; height:100%; display:block; }
   .track{ fill:none; stroke:var(--ink-3); stroke-width:11; }
@@ -49,6 +49,16 @@
   .pace-time{ font-family:var(--display); font-variation-settings:"opsz" 120,"wght" 400;
               font-size:36px; line-height:1; letter-spacing:-.02em; font-feature-settings:"tnum";
               transition:color .4s ease; }
+  .faults{ display:none; padding:11px 13px; margin:4px 0; border-radius:11px;
+           background:#FBF0EE; box-shadow:0 0 0 1px #E0B9B2; color:#7A2E24;
+           font-size:13px; line-height:1.45; }
+  .readout{ display:block; width:100%; text-align:left; padding:12px 14px; margin:2px 0 4px;
+            font-size:14px; line-height:1.45; border-radius:12px;
+            background:var(--ink-2); box-shadow:0 0 0 1px var(--ink-3); color:var(--cream); }
+  .readout:empty{ display:none; }
+  .readout:active{ background:var(--ink-3); }
+  .readout.warn{ box-shadow:0 0 0 1px #E4C9A8; background:#FBF4EA; }
+  .readout.good{ box-shadow:0 0 0 1px #BCDFC9; background:#F1F9F3; }
   .sec{ display:flex; align-items:baseline; justify-content:space-between; margin:24px 2px 10px;
         font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--haze); }
   .sec .count{ color:var(--brass-dim); }
@@ -167,6 +177,8 @@
   <div class="mini-chart" id="miniChart"></div>
 </div>
 
+<div class="faults" id="faults"></div>
+
 <div id="todo"></div>
 <div id="done"></div>
 
@@ -279,11 +291,20 @@
     return S.log[addDays(S.lastDay, -1)] || null;
   }
   function gateState(){
+    /* An empty list is always allowed to begin. There is nothing to catch up
+       on, so a restart or a first day can never be blocked. */
+    if(!S.habits.length) return { open:true, reason:"first" };
+
     var rec = yesterdayRecord();
     if(!rec) return { open:true, reason:"first" };      // nothing to judge yet
-    var ids = Object.keys(rec);
+
+    /* Judge only habits that still exist. One you have since deleted should
+       not go on blocking you from its grave. */
+    var ids = S.habits.map(function(h){ return h.id; })
+                      .filter(function(id){ return rec[id] !== undefined; });
     if(!ids.length) return { open:true, reason:"first" };
-    var missed = ids.filter(function(k){ return rec[k] < 1; });
+
+    var missed = ids.filter(function(id){ return rec[id] < 1; });
     return missed.length
       ? { open:false, missed:missed.length, total:ids.length }
       : { open:true, reason:"earned" };
@@ -495,10 +516,18 @@
   /* One gradient reused by both charts. It runs bottom to top over the 0-100
      axis, so a point's colour is the rainbow value of its own number — the
      same mapping as the habit tiles. */
-  function rainbowDefs(id, yTop, yBottom){
+  /* The stops are placed by VALUE, not by position, so a point's colour is
+     always the rainbow value of its own number — even when the axis is zoomed
+     and the top of the box is 12 rather than 100. Called with no lo/hi it
+     behaves exactly as before. */
+  function rainbowDefs(id, yTop, yBottom, lo, hi){
+    if(lo === undefined) lo = 0;
+    if(hi === undefined) hi = 100;
     var stops = "";
-    for(var v = 0; v <= 100; v += 10){
-      stops += '<stop offset="' + v + '%" stop-color="hsl(' + (v*3) + ',85%,45%)"></stop>';
+    for(var k = 0; k <= 10; k++){
+      var v = lo + (hi - lo) * (k/10);
+      stops += '<stop offset="' + (k*10) + '%" stop-color="hsl(' +
+               (clamp(v,0,100)*3).toFixed(0) + ',85%,45%)"></stop>';
     }
     return '<defs><linearGradient id="' + id + '" gradientUnits="userSpaceOnUse" ' +
            'x1="0" y1="' + yBottom + '" x2="0" y2="' + yTop + '">' + stops + "</linearGradient></defs>";
@@ -513,43 +542,158 @@
     if(pts.length < 2){ el.innerHTML = ""; return; }
 
     var last = pts[pts.length-1].total;
-    var pr = projection(pts);
-    var span = pr ? pr.span : (pts.length - 1);
+    var fit = !!S.fitChart;          /* tapped: zoomed to the data */
+
+    /* vertical range: the whole climb, or just the data with a little air */
+    var lo = 0, hi = 100;
+    if(fit){
+      var vals = pts.map(function(p){ return p.total; });
+      lo = Math.min.apply(null, vals);
+      hi = Math.max.apply(null, vals);
+      var pad = Math.max(0.4, (hi - lo) * 0.18);
+      lo = Math.max(0, lo - pad); hi = hi + pad;
+      if(hi - lo < 1) hi = lo + 1;
+    }
+
+    /* horizontal range: out to the summit, or the data plus a little headroom
+       so the forward lines have somewhere to point */
+    var pr = fit ? null : projection(pts);
+    var span = pr ? pr.span : (pts.length - 1) * (fit ? 1.25 : 1);
+    if(!(span > 0)) span = 1;
 
     function x(i){ return PAD + (i/span) * (W - PAD*2); }
-    function y(v){ return H - PAD - (clamp(v,0,100)/100) * (H - PAD*2); }
+    function y(v){ return H - PAD - ((clamp(v,lo,hi) - lo)/(hi - lo)) * (H - PAD*2); }
+
+    /* A ray from a point at a per-day slope, stopped by whichever edge of the
+       box it meets first. Solving for the crossing keeps the angle true
+       instead of bending the line to fit. */
+    function ray(i0, v0, slope){
+      if(!slope || Math.abs(slope) < 1e-9) return { i:span, v:v0 };
+      var i = span, v = v0 + slope * (span - i0);
+      if(v > hi){ i = i0 + (hi - v0)/slope; v = hi; }
+      else if(v < lo){ i = i0 + (lo - v0)/slope; v = lo; }
+      return { i:Math.min(i, span), v:v };
+    }
 
     var line = "";
     pts.forEach(function(p,i){ line += (i?"L":"M") + x(i).toFixed(1) + " " + y(p.total).toFixed(1) + " "; });
 
-    var climb = pr
-      ? '<line x1="' + x(pts.length-1).toFixed(1) + '" y1="' + y(last).toFixed(1) +
-        '" x2="' + x(pr.span).toFixed(1) + '" y2="' + y(100).toFixed(1) +
-        '" stroke="var(--trend)" stroke-width="1.2" stroke-dasharray="3 4" stroke-linecap="round"></line>'
-      : "";
+    var i0 = pts.length - 1;
+    var tr = trendOf(pts);
 
-    /* today's own rate, carried on at the same slope */
+    /* the long trend — to 100 in the full view, across the window when zoomed */
+    var climb = "";
+    if(pr){
+      climb = '<line x1="' + x(i0).toFixed(1) + '" y1="' + y(last).toFixed(1) +
+              '" x2="' + x(pr.span).toFixed(1) + '" y2="' + y(100).toFixed(1) +
+              '" stroke="var(--trend)" stroke-width="1.2" stroke-dasharray="3 4" stroke-linecap="round"></line>';
+    } else if(tr){
+      var b = ray(0, tr.at(0), tr.slope);
+      climb = '<line x1="' + x(0).toFixed(1) + '" y1="' + y(tr.at(0)).toFixed(1) +
+              '" x2="' + x(b.i).toFixed(1) + '" y2="' + y(b.v).toFixed(1) +
+              '" stroke="var(--trend)" stroke-width="1.2" stroke-dasharray="3 4" stroke-linecap="round"></line>';
+    }
+
+    /* today's own rate, carried forward at its own slope */
     var tod = todayRate(pts), rate = "";
     if(tod){
-      var tx = Math.min(tod.span, span);
-      var ty = 100 - (tod.span - tx) * tod.delta;
-      rate = '<line x1="' + x(pts.length-1).toFixed(1) + '" y1="' + y(last).toFixed(1) +
-             '" x2="' + x(tx).toFixed(1) + '" y2="' + y(ty).toFixed(1) +
-             '" stroke="var(--ahead)" stroke-width="1.3" stroke-dasharray="1 3" ' +
-             'stroke-linecap="round" opacity=".85"></line>';
+      var e = ray(i0, last, tod.delta);
+      if(e.i > i0 + 0.01){
+        rate = '<line x1="' + x(i0).toFixed(1) + '" y1="' + y(last).toFixed(1) +
+               '" x2="' + x(e.i).toFixed(1) + '" y2="' + y(e.v).toFixed(1) +
+               '" stroke="var(--ahead)" stroke-width="1.3" stroke-dasharray="1 3" ' +
+               'stroke-linecap="round" opacity=".85"></line>';
+      }
     }
 
     var summitLabel = pr
       ? '<text x="' + (W-PAD) + '" y="' + (y(100)-3).toFixed(1) + '" text-anchor="end" ' +
-        'font-size="8.5" fill="var(--haze)" font-family="' + "Inter Tight, sans-serif" + '">' +
-        esc(shortProjDate(pr.daysLeft)) + "</text>"
+        'font-size="8.5" fill="var(--haze)">' + esc(shortProjDate(pr.daysLeft)) + "</text>"
       : "";
 
     el.innerHTML = '<svg viewBox="0 0 ' + W + " " + H + '">' +
-      rainbowDefs("gradMini", y(100), y(0)) + climb + rate + summitLabel +
+      rainbowDefs("gradMini", y(hi), y(lo), lo, hi) + climb + rate + summitLabel +
       '<path d="' + line + '" fill="none" stroke="url(#gradMini)" stroke-width="2.2" ' +
         'stroke-linejoin="round" stroke-linecap="round"></path>' +
       "</svg>";
+  }
+
+  /* ---------- the week's read ----------
+     A one-line answer to "how is it actually going?", computed from the data:
+     recent pace against the long-run trend, and which habits have lost ground
+     in the last week. No model and no network — every signal here is
+     arithmetic on scores already on this device, so it works offline and
+     cannot invent something that is not there.
+
+     The zoomed-out chart is deliberately bad at short horizons. This is the
+     short horizon. */
+
+  function weekRead(){
+    if(S.history.length < 3) return null;
+
+    var pts = chartPoints();
+    var tr = trendOf(pts);
+    var overall = tr ? tr.slope : 0;
+
+    /* the last week or so, on its own */
+    var recent = trendOf(pts.slice(-8));
+    var now = recent ? recent.slope : overall;
+
+    /* habits that have gone backwards since a week ago */
+    var idx = Math.max(0, S.history.length - 8);
+    var then = S.scores[S.history[idx].d] || null;
+    var falling = [];
+    if(then){
+      S.habits.forEach(function(h){
+        if(then[h.id] === undefined) return;
+        var drop = then[h.id] - h.score;
+        if(drop >= 1) falling.push({ name:h.name, drop:drop });
+      });
+      falling.sort(function(a,b){ return b.drop - a.drop; });
+    }
+
+    var run = cleanStreak();
+    var names = falling.slice(0,2).map(function(f){ return f.name; });
+    var more = falling.length - names.length;
+    var list = names.join(" and ") + (more > 0 ? " and " + more + " more" : "");
+
+    /* most urgent thing first */
+    var tone, text;
+
+    if(falling.length){
+      tone = "warn";
+      text = (falling.length === 1 ? list + " is" : list + " are") +
+             " losing ground this week" +
+             (now > overall * 0.9 ? ", though the overall pace is holding."
+                                  : " — worth catching now.");
+    } else if(now < overall * 0.4){
+      tone = "warn";
+      text = "This week is slower than your usual pace. Nothing lost yet, but it is flattening.";
+    } else if(now > overall * 1.15){
+      tone = "good";
+      text = "This week is climbing faster than your average" +
+             (run >= 3 ? " — " + run + " clean days in a row." : ".");
+    } else if(run >= 5){
+      tone = "good";
+      text = run + " clean days in a row. Steady and on trend.";
+    } else {
+      tone = "ok";
+      text = "Holding steady, right about on your usual pace.";
+    }
+
+    return { tone:tone, text:text, falling:falling, now:now, overall:overall, run:run };
+  }
+
+  /* Not currently on the page — the front-page line is taken out. Restoring it
+     needs the button back in the markup plus its safe() call in render(). The
+     Progress panel still uses weekRead() for its "This week" block. */
+  function drawRead(){
+    var el = document.getElementById("readout");
+    if(!el) return;
+    var r = S.habits.length ? weekRead() : null;
+    if(!r){ el.innerHTML = ""; el.className = "readout"; return; }
+    el.className = "readout " + r.tone;
+    el.textContent = r.text;
   }
 
   /* ---------- render ---------- */
@@ -592,9 +736,39 @@
   /* exports keep more decimals — 5/12 of a habit must not round to nothing */
   function fmtVal(v){ return parseFloat(v.toFixed(4)).toString(); }
 
-  function render(){
-    tickDial(); drawMini();
+  /* Runs one piece of the page. A failure here is reported, never fatal:
+     the habit list must survive a broken chart or readout. */
+  function safe(name, fn){
+    try{ fn(); return null; }
+    catch(e){ return name + ": " + (e && e.message ? e.message : String(e)); }
+  }
 
+  function render(){
+    /* the list comes first — it is the part that matters */
+    var faults = [];
+    var f = safe("list", renderList);
+    if(f) faults.push(f);
+
+    /* everything below is decoration, and guarded accordingly */
+    f = safe("button", renderAdd);   if(f) faults.push(f);
+    f = safe("clock",  tickDial);    if(f) faults.push(f);
+    f = safe("chart",  drawMini);    if(f) faults.push(f);
+
+    var fx = document.getElementById("faults");
+    if(fx){
+      if(faults.length){
+        fx.textContent = "Something broke: " + faults.join(" · ") +
+          " — the list below still works. Tell Claude this message.";
+        fx.style.display = "block";
+      } else fx.style.display = "none";
+    }
+
+    document.getElementById("hint").textContent =
+      S.habits.length ? "Tap to enter an amount · hold to tick off" : "";
+    document.getElementById("editBtn").textContent = editMode ? "Done editing" : "Edit habits";
+  }
+
+  function renderList(){
     var order = seededOrder();
     var todo = order.filter(function(h){ return !isDone(h); });
     var done = order.filter(isDone);
@@ -630,6 +804,9 @@
       dEl.innerHTML = dh;
     } else dEl.innerHTML = "";
 
+  }
+
+  function renderAdd(){
     var add = document.getElementById("addBtn");
     var already = S.lastAdded === S.lastDay;
     var gate = gateState();
@@ -643,14 +820,13 @@
         " missed yesterday — today is for getting back up to speed</small>";
     } else {
       add.className = "newday";
-      add.innerHTML = "+ Add today's new habit<small>" +
-        (gate.reason === "earned" ? "Earned it — yesterday was clean" : "One a day, one at a time") +
+      add.innerHTML = (S.habits.length ? "+ Add today's new habit" : "+ Add your first habit") +
+        "<small>" +
+        (!S.habits.length ? "Day one — one habit, that's all"
+          : gate.reason === "earned" ? "Earned it — yesterday was clean"
+          : "One a day, one at a time") +
         "</small>";
     }
-
-    document.getElementById("hint").textContent =
-      S.habits.length ? "Tap to enter an amount · hold to tick off" : "";
-    document.getElementById("editBtn").textContent = editMode ? "Done editing" : "Edit habits";
   }
 
   /* ---------- interaction ---------- */
@@ -1052,7 +1228,24 @@
             : tr.slope < -0.02 ? "falling, about " + (Math.round(Math.abs(tr.slope)*100)/100) + " a day"
             : "flat — holding steady";
 
-    open("<h2>Progress</h2>" +
+    var rd = weekRead();
+    var weekBlock = "";
+    if(rd){
+      weekBlock = '<div class="field"><label>This week</label>' +
+        '<div class="readout ' + rd.tone + '" style="margin:0 0 10px">' + esc(rd.text) + "</div>" +
+        '<div class="help">' +
+          "Pace over the last week: " + (Math.round(rd.now*100)/100) + " a day\n" +
+          "Your long-run pace: " + (Math.round(rd.overall*100)/100) + " a day\n" +
+          (rd.falling.length
+            ? "\nLosing ground since last week:\n" +
+              rd.falling.map(function(f){
+                return "  " + f.name + " — down " + (Math.round(f.drop*10)/10);
+              }).join("\n")
+            : "\nNo habit has gone backwards this week.") +
+        "</div></div>";
+    }
+
+    open("<h2>Progress</h2>" + weekBlock +
       '<div class="field"><label>Average habit score</label>' + chartSVG(pts) +
         '<div class="help">The same number your sheet keeps at the top of column B: every ' +
         "habit's score, averaged. It falls on the days habits slip, and a brand new habit " +
@@ -1085,6 +1278,19 @@
   }
 
   document.getElementById("chartBtn").onclick = openProgress;
+
+  /* Tapping the small chart switches between the whole climb to 100 and a
+     view scaled to the data, where a week's movement is actually visible.
+     The choice is remembered. */
+  (function(){
+    var mc = document.getElementById("miniChart");
+    if(!mc) return;
+    mc.onclick = function(){
+      if(!S) return;
+      S.fitChart = !S.fitChart;
+      save(); drawMini();
+    };
+  })();
 
   /* ---------- history, laid out like the sheet ---------- */
 
@@ -1323,6 +1529,16 @@
       }catch(e){ document.getElementById("b-restore").textContent = "That isn't a valid backup"; }
     };
   };
+
+  /* Last resort. If anything above throws before the page is drawn, say so —
+     a blank page tells you nothing and hides that your data is still safe. */
+  window.addEventListener("error", function(ev){
+    var fx = document.getElementById("faults");
+    if(!fx) return;
+    fx.textContent = "The page hit an error: " + (ev.message || "unknown") +
+      " — your saved data is untouched. Tell Claude this message.";
+    fx.style.display = "block";
+  });
 
   buildTicks(); boot();
   document.addEventListener("visibilitychange", function(){
